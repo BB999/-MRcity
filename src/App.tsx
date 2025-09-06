@@ -64,7 +64,7 @@ function App() {
           <Environment preset={xrMode === 'ar' ? 'apartment' : 'sunset'} />
           <ambientLight intensity={xrMode === 'ar' ? 0.2 : 0.5} />
           <directionalLight position={[10, 10, 5]} intensity={xrMode === 'ar' ? 0.5 : 1} />
-          <CityDiorama scale={xrMode === 'ar' ? 0.3 : 1} />
+          <CityDiorama scale={xrMode === 'ar' ? 0.15 : 0.5} />
           {(xrMode === 'vr' || xrMode === 'ar') && <HandTracking />}
         </XR>
       </Canvas>

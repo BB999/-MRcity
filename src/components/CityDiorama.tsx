@@ -4,6 +4,7 @@ import { Group } from 'three'
 import Building from './Building'
 import Ground from './Ground'
 import Road from './Road'
+import GroundEffect from './GroundEffect'
 
 interface CityDioramaProps {
   scale?: number
@@ -26,6 +27,9 @@ function CityDiorama({ scale = 1 }: CityDioramaProps) {
       
       {/* 道路 */}
       <Road />
+      
+      {/* 地面エフェクト */}
+      <GroundEffect />
       
       {/* 建物の配置 */}
       <Building position={[-3, 0, -3]} scale={[1, 2, 1]} color="#ff6b6b" />
