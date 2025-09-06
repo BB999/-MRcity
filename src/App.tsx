@@ -1,12 +1,13 @@
-import { useState } from 'react'
+import { useState, useMemo } from 'react'
 import { Canvas } from '@react-three/fiber'
-import { XR, VRButton, ARButton, XRButton } from '@react-three/xr'
+import { XR, VRButton, ARButton, createXRStore } from '@react-three/xr'
 import { OrbitControls, Environment } from '@react-three/drei'
 import CityDiorama from './components/CityDiorama'
 import HandTracking from './components/HandTracking'
 
 function App() {
   const [xrMode, setXrMode] = useState<'none' | 'vr' | 'ar'>('none')
+  const store = useMemo(() => createXRStore(), [])
 
   return (
     <div style={{ width: '100vw', height: '100vh' }}>
@@ -52,11 +53,11 @@ function App() {
         </button>
       </div>
 
-      {xrMode === 'vr' && <VRButton />}
-      {xrMode === 'ar' && <ARButton />}
+      {xrMode === 'vr' && <VRButton store={store} />}
+      {xrMode === 'ar' && <ARButton store={store} />}
 
       <Canvas camera={{ position: [0, 5, 10], fov: 60 }}>
-        <XR referenceSpace="local-floor">
+        <XR store={store}>
           {xrMode === 'none' && (
             <OrbitControls enablePan={true} enableZoom={true} enableRotate={true} />
           )}

@@ -1,6 +1,6 @@
 import { useRef } from 'react'
 import { useFrame } from '@react-three/fiber'
-import { Group, Mesh } from 'three'
+import { Group } from 'three'
 import Building from './Building'
 import Ground from './Ground'
 import Road from './Road'
@@ -13,7 +13,7 @@ function CityDiorama({ scale = 1 }: CityDioramaProps) {
   const groupRef = useRef<Group>(null)
 
   // ゆっくりと回転させる
-  useFrame((state, delta) => {
+  useFrame((_state, delta) => {
     if (groupRef.current) {
       groupRef.current.rotation.y += delta * 0.1
     }
