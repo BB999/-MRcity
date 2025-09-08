@@ -76,6 +76,8 @@ const GlowingSphere: React.FC = () => {
       if (intersections.length > 0) {
         const picked = intersections[0].object as THREE.Mesh;
         controller.userData.selected = picked;
+        // この掴みで影響を受けたインデックスを追跡
+        (controller as any).userData.pulledIndices = new Set<number>();
         if ((picked.material as THREE.Material) && (picked.material as any).color) {
           // 基本色を保持していなければ保存
           if (!picked.userData.baseColor) {
@@ -113,6 +115,17 @@ const GlowingSphere: React.FC = () => {
           (mesh as any).userData.hover.base.copy(mesh.position);
         }
         (mesh as any).userData.grabbed = false;
+        // この掴みで引っ張られた球体は、その位置を新しい基準に固定
+        const pulled: Set<number> | undefined = (controller as any).userData?.pulledIndices;
+        if (pulled && pulled.size > 0) {
+          Array.from(pulled).forEach((idx) => {
+            const n = spheres[idx];
+            if (n && (n as any).userData?.hover) {
+              (n as any).userData.hover.base.copy(n.position);
+            }
+          });
+        }
+        (controller as any).userData.pulledIndices = undefined;
         controller.userData.selected = undefined;
       }
     };
@@ -254,7 +267,7 @@ const GlowingSphere: React.FC = () => {
           }
         }
 
-        // 掴んでいる球体があれば、±1と±2の接続にも減衰付きで引っ張り影響
+        // 掴んでいる球体があれば、±3（3つ先）にのみ減衰付きで引っ張り影響
         for (const ctrl of controllersRef.current) {
           const sel = (ctrl as any).userData?.selected as THREE.Mesh | undefined;
           if (!sel) continue;
@@ -262,24 +275,26 @@ const GlowingSphere: React.FC = () => {
           if (selIdx === undefined) continue;
           const selWorld = new THREE.Vector3();
           sel.getWorldPosition(selWorld);
-          const applyPull = (neighborIdx: number, graphDist: number) => {
+          const applyPull = (neighborIdx: number) => {
             if (neighborIdx < 0 || neighborIdx >= spheres.length) return;
             const n = spheres[neighborIdx];
             if ((n as any).userData?.grabbed) return;
-            // 基本はチェーン距離による重み、距離が近いほど強く
-            const baseWeight = graphDist === 1 ? 0.22 : 0.12;
+            // 強めに引っ張る: 係数を上げ、距離減衰を緩める
+            const baseWeight = 0.5; // 0.2 -> 0.5 に増強
             const nWorld = new THREE.Vector3();
             n.getWorldPosition(nWorld);
             const d = nWorld.distanceTo(selWorld);
-            const distAtten = 1 / (1 + d * 2.5); // 近いほど1に近づく
-            const alpha = baseWeight * distAtten;
+            const distAtten = 1 / (1 + d * 1.0); // 2.5 -> 1.0 に緩和
+            const alpha = Math.min(0.85, baseWeight * distAtten);
             // 現在位置を選択球に向けて補間
             n.position.lerp(selWorld, alpha);
+            // 影響を受けたことを記録
+            const set: Set<number> = (ctrl as any).userData.pulledIndices || new Set<number>();
+            set.add(neighborIdx);
+            (ctrl as any).userData.pulledIndices = set;
           };
-          applyPull(selIdx - 1, 1);
-          applyPull(selIdx + 1, 1);
-          applyPull(selIdx - 2, 2);
-          applyPull(selIdx + 2, 2);
+          applyPull(selIdx - 3);
+          applyPull(selIdx + 3);
         }
 
         // ラインの更新（毎フレーム）
