@@ -31,6 +31,8 @@ const GlowingSphere: React.FC = () => {
     const makeMaterial = (color: THREE.Color | number) => new THREE.MeshBasicMaterial({ color });
     const spheres: THREE.Mesh[] = [];
     const lines: { line: THREE.Line, a: number, b: number }[] = [];
+    // 接続グラフ（無向）: 距離3のノード探索に使用
+    const adjacency: number[][] = Array.from({ length: SPHERE_COUNT }, () => []);
 
 
     camera.position.z = 5;
@@ -247,6 +249,9 @@ const GlowingSphere: React.FC = () => {
               const line = new THREE.Line(geom, new THREE.LineBasicMaterial({ color: 0xffffff }));
               scene.add(line);
               lines.push({ line, a, b });
+              // 無向グラフとして接続を登録
+              adjacency[a].push(b);
+              adjacency[b].push(a);
             }
 
             placedRef.current = true;
@@ -267,7 +272,7 @@ const GlowingSphere: React.FC = () => {
           }
         }
 
-        // 掴んでいる球体があれば、±3（3つ先）にのみ減衰付きで引っ張り影響
+        // 掴んでいる球体があれば、接続グラフ距離ちょうど3のノードのみを減衰付きで引っ張る
         for (const ctrl of controllersRef.current) {
           const sel = (ctrl as any).userData?.selected as THREE.Mesh | undefined;
           if (!sel) continue;
@@ -275,26 +280,34 @@ const GlowingSphere: React.FC = () => {
           if (selIdx === undefined) continue;
           const selWorld = new THREE.Vector3();
           sel.getWorldPosition(selWorld);
-          const applyPull = (neighborIdx: number) => {
-            if (neighborIdx < 0 || neighborIdx >= spheres.length) return;
-            const n = spheres[neighborIdx];
-            if ((n as any).userData?.grabbed) return;
-            // 強めに引っ張る: 係数を上げ、距離減衰を緩める
-            const baseWeight = 0.5; // 0.2 -> 0.5 に増強
-            const nWorld = new THREE.Vector3();
-            n.getWorldPosition(nWorld);
-            const d = nWorld.distanceTo(selWorld);
-            const distAtten = 1 / (1 + d * 1.0); // 2.5 -> 1.0 に緩和
-            const alpha = Math.min(0.85, baseWeight * distAtten);
-            // 現在位置を選択球に向けて補間
+          // BFSで距離3のノードを列挙
+          const dist: number[] = Array(spheres.length).fill(Infinity);
+          const q: number[] = [];
+          dist[selIdx] = 0;
+          q.push(selIdx);
+          for (let qi = 0; qi < q.length; qi++) {
+            const v = q[qi];
+            if (dist[v] >= 3) continue; // 3より先は不要
+            for (const nv of adjacency[v]) {
+              if (dist[nv] > dist[v] + 1) {
+                dist[nv] = dist[v] + 1;
+                q.push(nv);
+              }
+            }
+          }
+
+          for (let i = 0; i < dist.length; i++) {
+            if (dist[i] !== 3) continue; // ちょうど距離3のみ
+            const n = spheres[i];
+            if ((n as any).userData?.grabbed) continue;
+            // 距離（物理的な距離）に依存しない一定強度で引っ張る
+            const alpha = 0.65; // 一定の強い追従
             n.position.lerp(selWorld, alpha);
             // 影響を受けたことを記録
             const set: Set<number> = (ctrl as any).userData.pulledIndices || new Set<number>();
-            set.add(neighborIdx);
+            set.add(i);
             (ctrl as any).userData.pulledIndices = set;
-          };
-          applyPull(selIdx - 3);
-          applyPull(selIdx + 3);
+          }
         }
 
         // ラインの更新（毎フレーム）
