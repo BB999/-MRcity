@@ -169,9 +169,9 @@ function NodeNetwork({ xrMode }) {
       initialNodes.push({
         id: i,
         position: [
-          (Math.random() - 0.5) * 15,
-          (Math.random() - 0.5) * 15,
-          (Math.random() - 0.5) * 15
+          (Math.random() - 0.5) * (xrMode === 'ar' ? 3 : 15),
+          (Math.random() - 0.5) * (xrMode === 'ar' ? 3 : 15),
+          (Math.random() - 0.5) * (xrMode === 'ar' ? 3 : 15)
         ],
         color: colors[Math.floor(Math.random() * colors.length)],
         size: Math.random() * 0.3 + 0.1,
@@ -374,8 +374,8 @@ function App() {
 
       <Canvas 
         camera={{ position: [0, 5, 10], fov: 60 }}
-        style={{ background: '#000033' }}
-        gl={{ antialias: true, alpha: false }}
+        style={{ background: xrMode === 'ar' ? 'transparent' : '#000033' }}
+        gl={{ antialias: true, alpha: xrMode === 'ar' }}
       >
         <XR store={store}>
           {xrMode === 'none' && (
@@ -394,9 +394,9 @@ function App() {
               }}
             />
           )}
-          <ambientLight intensity={0.4} />
-          <directionalLight position={[10, 10, 5]} intensity={0.5} />
-          <fog attach="fog" args={['#000011', 5, 50]} />
+          <ambientLight intensity={xrMode === 'ar' ? 1.0 : 0.4} />
+          <directionalLight position={[10, 10, 5]} intensity={xrMode === 'ar' ? 1.5 : 0.5} />
+          {xrMode !== 'ar' && <fog attach="fog" args={['#000011', 5, 50]} />}
           
           <NodeNetwork xrMode={xrMode} />
           
