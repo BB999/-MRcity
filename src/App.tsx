@@ -1,16 +1,162 @@
 import { useState, useMemo, useRef } from 'react'
-import { Canvas, useFrame } from '@react-three/fiber'
-import { XR, ARButton, createXRStore } from '@react-three/xr'
+import * as React from 'react'
+import { Canvas, useFrame, useThree } from '@react-three/fiber'
+import { XR, ARButton, createXRStore, useXREvent } from '@react-three/xr'
 import { OrbitControls } from '@react-three/drei'
 import { Vector3 } from 'three'
 import * as THREE from 'three'
+import { EffectComposer, Bloom, Noise } from '@react-three/postprocessing'
+
+// ドラッグ可能なノードコンポーネント
+function DraggableNode({ node, onPositionChange, isXR }) {
+  const meshRef = useRef()
+  const { gl, camera, raycaster, viewport } = useThree()
+  const [isDragging, setIsDragging] = useState(false)
+  const [isGrabbed, setIsGrabbed] = useState(false)
+  const [dragPlane] = useState(() => new THREE.Plane())
+  const [intersection] = useState(() => new THREE.Vector3())
+  const [offset] = useState(() => new THREE.Vector3())
+  
+  const handlePointerDown = (e) => {
+    e.stopPropagation()
+    setIsDragging(true)
+    gl.domElement.style.cursor = 'grabbing'
+    
+    // ノードの位置から、カメラ方向に垂直な平面を作成
+    const nodePos = new THREE.Vector3(...node.position)
+    const cameraDirection = new THREE.Vector3()
+    camera.getWorldDirection(cameraDirection)
+    dragPlane.setFromNormalAndCoplanarPoint(cameraDirection, nodePos)
+    
+    // マウス位置からレイを飛ばして、現在のオフセットを計算
+    const mouse = new THREE.Vector2()
+    mouse.x = (e.nativeEvent.clientX / window.innerWidth) * 2 - 1
+    mouse.y = -(e.nativeEvent.clientY / window.innerHeight) * 2 + 1
+    
+    raycaster.setFromCamera(mouse, camera)
+    raycaster.ray.intersectPlane(dragPlane, intersection)
+    
+    if (intersection) {
+      offset.subVectors(nodePos, intersection)
+    }
+  }
+
+  const handlePointerUp = () => {
+    setIsDragging(false)
+    gl.domElement.style.cursor = 'grab'
+  }
+
+  // グローバルなマウス移動をリスンする
+  React.useEffect(() => {
+    if (isDragging) {
+      const handleGlobalPointerMove = (e) => {
+        // 現在のマウス位置を取得
+        const mouse = new THREE.Vector2()
+        mouse.x = (e.clientX / window.innerWidth) * 2 - 1
+        mouse.y = -(e.clientY / window.innerHeight) * 2 + 1
+        
+        // マウスからレイを飛ばして平面との交点を求める
+        raycaster.setFromCamera(mouse, camera)
+        raycaster.ray.intersectPlane(dragPlane, intersection)
+        
+        if (intersection) {
+          // オフセットを適用した新しい位置
+          const newPosition = intersection.add(offset)
+          onPositionChange(node.id, [newPosition.x, newPosition.y, newPosition.z])
+        }
+      }
+      
+      const handleGlobalPointerUp = () => {
+        setIsDragging(false)
+        gl.domElement.style.cursor = 'auto'
+      }
+      
+      gl.domElement.addEventListener('pointermove', handleGlobalPointerMove)
+      gl.domElement.addEventListener('pointerup', handleGlobalPointerUp)
+      
+      return () => {
+        gl.domElement.removeEventListener('pointermove', handleGlobalPointerMove)
+        gl.domElement.removeEventListener('pointerup', handleGlobalPointerUp)
+      }
+    }
+  }, [isDragging, dragPlane, intersection, offset, node.id, camera, raycaster, gl, onPositionChange])
+
+  // XRでのハンドトラッキング対応
+  const handleSelectStart = (e) => {
+    if (isXR) {
+      setIsGrabbed(true)
+      const handPosition = e.target.position
+      offset.subVectors(new THREE.Vector3(...node.position), handPosition)
+    }
+  }
+
+  const handleSelectEnd = () => {
+    if (isXR) {
+      setIsGrabbed(false)
+    }
+  }
+
+  const handleMove = (e) => {
+    if (isXR && isGrabbed) {
+      const handPosition = e.target.position
+      const newPosition = handPosition.clone().add(offset)
+      onPositionChange(node.id, [newPosition.x, newPosition.y, newPosition.z])
+    }
+  }
+
+  return (
+    <group
+      ref={meshRef}
+      position={node.position}
+      onPointerOver={() => !isXR && (gl.domElement.style.cursor = 'grab')}
+      onPointerOut={() => !isXR && !isDragging && (gl.domElement.style.cursor = 'auto')}
+    >
+      <mesh
+        onPointerDown={!isXR ? handlePointerDown : undefined}
+        onSelectStart={isXR ? handleSelectStart : undefined}
+        onSelectEnd={isXR ? handleSelectEnd : undefined}
+        onPointerMove={isXR ? handleMove : undefined}
+        ref={(ref) => {
+          if (ref) {
+            // 各球体に微妙な個別の回転を追加
+            const animate = () => {
+              const time = Date.now() * 0.001
+              ref.rotation.x = Math.sin(time * 0.7 + node.id) * 0.1
+              ref.rotation.y = Math.cos(time * 0.5 + node.id) * 0.1
+              ref.rotation.z = Math.sin(time * 0.3 + node.id) * 0.05
+              requestAnimationFrame(animate)
+            }
+            animate()
+          }
+        }}
+      >
+        <sphereGeometry args={[node.size, 32, 32]} />
+        <meshStandardMaterial
+          color={node.color}
+          emissive={node.color}
+          emissiveIntensity={1.2}
+          transparent
+          opacity={0.9}
+          roughness={0.1}
+          metalness={0.2}
+        />
+      </mesh>
+      <pointLight
+        color={node.color}
+        intensity={node.glow}
+        distance={6}
+        decay={1}
+      />
+      
+    </group>
+  )
+}
 
 // 3D座標上にランダムなノード群を生成
-function NodeNetwork() {
-  // ノードのデータ構造
-  const networkData = useMemo(() => {
-    const nodes = []
-    const connections = []
+function NodeNetwork({ xrMode }) {
+  // ノードの状態を管理
+  const [nodes, setNodes] = useState(() => {
+    const initialNodes = []
     const nodeCount = 25
     const colors = [
       '#ff4444', '#44ff44', '#4444ff', '#ffaa44', '#ff44aa', 
@@ -20,7 +166,7 @@ function NodeNetwork() {
     
     // ノード生成
     for (let i = 0; i < nodeCount; i++) {
-      nodes.push({
+      initialNodes.push({
         id: i,
         position: [
           (Math.random() - 0.5) * 15,
@@ -32,10 +178,17 @@ function NodeNetwork() {
         glow: Math.random() * 2 + 1
       })
     }
+    return initialNodes
+  })
+
+  // 固定の接続データを初期化時のみ作成
+  const [connections, setConnections] = useState(() => {
+    const connectionsList = []
+    const initialNodes = nodes
     
     // まず最短経路で全てのノードを接続
     const connected = new Set([0]) // 最初のノードを接続済みとする
-    const unconnected = new Set(Array.from({ length: nodeCount }, (_, i) => i).slice(1))
+    const unconnected = new Set(Array.from({ length: initialNodes.length }, (_, i) => i).slice(1))
     
     // 最小スパニングツリーのようにすべてのノードを接続
     while (unconnected.size > 0) {
@@ -45,9 +198,9 @@ function NodeNetwork() {
       for (const connectedNode of connected) {
         for (const unconnectedNode of unconnected) {
           const distance = Math.sqrt(
-            Math.pow(nodes[connectedNode].position[0] - nodes[unconnectedNode].position[0], 2) +
-            Math.pow(nodes[connectedNode].position[1] - nodes[unconnectedNode].position[1], 2) +
-            Math.pow(nodes[connectedNode].position[2] - nodes[unconnectedNode].position[2], 2)
+            Math.pow(initialNodes[connectedNode].position[0] - initialNodes[unconnectedNode].position[0], 2) +
+            Math.pow(initialNodes[connectedNode].position[1] - initialNodes[unconnectedNode].position[1], 2) +
+            Math.pow(initialNodes[connectedNode].position[2] - initialNodes[unconnectedNode].position[2], 2)
           )
           
           if (distance < closestPair.distance) {
@@ -57,10 +210,10 @@ function NodeNetwork() {
       }
       
       // 最も近いペアを接続
-      connections.push({
+      connectionsList.push({
         from: closestPair.from,
         to: closestPair.to,
-        color: Math.random() < 0.5 ? nodes[closestPair.from].color : nodes[closestPair.to].color,
+        color: Math.random() < 0.5 ? initialNodes[closestPair.from].color : initialNodes[closestPair.to].color,
         opacity: Math.random() * 0.4 + 0.5
       })
       
@@ -68,60 +221,81 @@ function NodeNetwork() {
       unconnected.delete(closestPair.to)
     }
     
-    return { nodes, connections }
-  }, [])
+    return connectionsList
+  })
   
   const groupRef = useRef<any>(null!)
   
-  // ゆっくり回転させる
+  // ゆっくりとした呼吸のような回転
   useFrame((state, delta) => {
     if (groupRef.current) {
-      groupRef.current.rotation.y += delta * 0.1
-      groupRef.current.rotation.x += delta * 0.05
+      // 非常にゆっくりした回転
+      groupRef.current.rotation.y += delta * 0.02
+      groupRef.current.rotation.x += delta * 0.015
+      groupRef.current.rotation.z += delta * 0.01
     }
   })
 
+  // ノードの位置更新ハンドラ（接続されたノードも影響を受ける）
+  const handlePositionChange = (nodeId, newPosition) => {
+    setNodes(prevNodes => {
+      const updatedNodes = [...prevNodes]
+      const draggedNode = updatedNodes.find(node => node.id === nodeId)
+      const oldPosition = draggedNode.position
+      
+      // ドラッグされたノードの位置を更新
+      draggedNode.position = newPosition
+      
+      // 移動量を計算
+      const deltaX = newPosition[0] - oldPosition[0]
+      const deltaY = newPosition[1] - oldPosition[1]
+      const deltaZ = newPosition[2] - oldPosition[2]
+      
+      // 接続されたノードを見つけて、少し引っ張る
+      connections.forEach(connection => {
+        let connectedNodeId = null
+        let influence = 0.2 // 影響の強さ（20%）
+        
+        if (connection.from === nodeId) {
+          connectedNodeId = connection.to
+        } else if (connection.to === nodeId) {
+          connectedNodeId = connection.from
+        }
+        
+        if (connectedNodeId !== null) {
+          const connectedNode = updatedNodes.find(node => node.id === connectedNodeId)
+          if (connectedNode) {
+            // 接続されたノードを少し引っ張る
+            connectedNode.position = [
+              connectedNode.position[0] + deltaX * influence,
+              connectedNode.position[1] + deltaY * influence,
+              connectedNode.position[2] + deltaZ * influence
+            ]
+          }
+        }
+      })
+      
+      return updatedNodes
+    })
+  }
+
   return (
     <group ref={groupRef}>
-      {/* ノード（光る球体）を描画 */}
-      {networkData.nodes.map((node) => (
-        <group key={node.id} position={node.position}>
-          {/* 光る球体 */}
-          <mesh>
-            <sphereGeometry args={[node.size, 16, 16]} />
-            <meshStandardMaterial
-              color={node.color}
-              emissive={node.color}
-              emissiveIntensity={0.5}
-              transparent
-              opacity={0.8}
-            />
-          </mesh>
-          {/* グロー効果のための外側の球体 */}
-          <mesh>
-            <sphereGeometry args={[node.size * 1.5, 16, 16]} />
-            <meshStandardMaterial
-              color={node.color}
-              emissive={node.color}
-              emissiveIntensity={0.2}
-              transparent
-              opacity={0.3}
-            />
-          </mesh>
-          {/* ポイントライト */}
-          <pointLight
-            color={node.color}
-            intensity={node.glow}
-            distance={3}
-            decay={2}
-          />
-        </group>
+      {/* ドラッグ可能なノード群 */}
+      {nodes.map((node) => (
+        <DraggableNode 
+          key={node.id} 
+          node={node} 
+          onPositionChange={handlePositionChange}
+          connections={connections}
+          isXR={xrMode === 'ar'}
+        />
       ))}
       
       {/* 接続線を描画（cylinderGeometryを使用） */}
-      {networkData.connections.map((connection, index) => {
-        const fromNode = networkData.nodes[connection.from]
-        const toNode = networkData.nodes[connection.to]
+      {connections.map((connection, index) => {
+        const fromNode = nodes[connection.from]
+        const toNode = nodes[connection.to]
         const fromPos = new Vector3(...fromNode.position)
         const toPos = new Vector3(...toNode.position)
         
@@ -148,7 +322,7 @@ function NodeNetwork() {
             <meshStandardMaterial
               color={connection.color}
               emissive={connection.color}
-              emissiveIntensity={0.3}
+              emissiveIntensity={0.9}
               transparent
               opacity={connection.opacity}
             />
@@ -161,7 +335,9 @@ function NodeNetwork() {
 
 function App() {
   const [xrMode, setXrMode] = useState<'none' | 'ar'>('none')
-  const store = useMemo(() => createXRStore(), [])
+  const store = useMemo(() => createXRStore({
+    hand: true, // ハンドトラッキング有効化
+  }), [])
 
   return (
     <div style={{ width: '100vw', height: '100vh' }}>
@@ -198,16 +374,43 @@ function App() {
 
       <Canvas 
         camera={{ position: [0, 5, 10], fov: 60 }}
-        style={{ background: '#000011' }}
+        style={{ background: '#000033' }}
+        gl={{ antialias: true, alpha: false }}
       >
         <XR store={store}>
           {xrMode === 'none' && (
-            <OrbitControls enablePan={true} enableZoom={true} enableRotate={true} />
+            <OrbitControls 
+              enablePan={true} 
+              enableZoom={true} 
+              enableRotate={true}
+              mouseButtons={{
+                LEFT: null,
+                MIDDLE: THREE.MOUSE.DOLLY,
+                RIGHT: THREE.MOUSE.ROTATE
+              }}
+              touches={{
+                ONE: THREE.TOUCH.ROTATE,
+                TWO: THREE.TOUCH.DOLLY_PAN
+              }}
+            />
           )}
-          <ambientLight intensity={0.5} />
-          <directionalLight position={[10, 10, 5]} intensity={1} />
+          <ambientLight intensity={0.4} />
+          <directionalLight position={[10, 10, 5]} intensity={0.5} />
+          <fog attach="fog" args={['#000011', 5, 50]} />
           
-          <NodeNetwork />
+          <NodeNetwork xrMode={xrMode} />
+          
+          {/* MRモードでハンドトラッキングを表示 */}
+          
+          <EffectComposer>
+            <Bloom 
+              luminanceThreshold={0.4} 
+              luminanceSmoothing={0.8}
+              intensity={1.0}
+              radius={0.7}
+            />
+            <Noise opacity={0.02} />
+          </EffectComposer>
         </XR>
       </Canvas>
     </div>
