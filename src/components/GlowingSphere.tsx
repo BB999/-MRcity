@@ -16,13 +16,14 @@ const GlowingSphere: React.FC = () => {
     const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
     const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
     renderer.xr.enabled = true;
+    // AR でカメラ映像を透過表示するため背景を透明に
+    renderer.setClearColor(0x000000, 0);
     
     renderer.setSize(window.innerWidth, window.innerHeight);
-    renderer.setClearColor(0x000000, 1);
     mountRef.current.appendChild(renderer.domElement);
 
     // 立方体のジオメトリとマテリアル
-    const geometry = new THREE.BoxGeometry(2, 2, 2);
+    const geometry = new THREE.BoxGeometry(0.2, 0.2, 0.2);
     const material = new THREE.MeshBasicMaterial({
       color: 0x00ff88,
     });
@@ -58,16 +59,23 @@ const GlowingSphere: React.FC = () => {
         controls.update();
       }
       
-      // 漂流するような動き
-      const time = Date.now() * 0.001;
-      cube.position.x = Math.sin(time) * 0.5;
-      cube.position.y = Math.cos(time * 1.2) * 0.3;
-      cube.position.z = Math.sin(time * 0.8) * 0.2;
-      
-      // ゆっくりとした回転
-      cube.rotation.x += 0.005;
-      cube.rotation.y += 0.003;
-      cube.rotation.z += 0.002;
+      // XR中はカメラの正面に常に表示
+      if (renderer.xr.isPresenting) {
+        const dir = new THREE.Vector3(0, 0, -1).applyQuaternion(camera.quaternion);
+        cube.position.copy(camera.position).add(dir.multiplyScalar(0.6));
+        cube.quaternion.copy(camera.quaternion);
+      } else {
+        // 非XR時は軽く漂わせる
+        const time = Date.now() * 0.001;
+        cube.position.x = Math.sin(time) * 0.5;
+        cube.position.y = Math.cos(time * 1.2) * 0.3;
+        cube.position.z = Math.sin(time * 0.8) * 0.2;
+
+        // ゆっくりとした回転
+        cube.rotation.x += 0.005;
+        cube.rotation.y += 0.003;
+        cube.rotation.z += 0.002;
+      }
       
       renderer.render(scene, camera);
     };
@@ -104,6 +112,8 @@ const GlowingSphere: React.FC = () => {
   const startXRSession = async () => {
     if (rendererRef.current && 'xr' in navigator) {
       try {
+        // AR に適した reference space を指定
+        rendererRef.current.xr.setReferenceSpaceType('local');
         const session = await (navigator as any).xr?.requestSession('immersive-ar', {
           requiredFeatures: ['local'],
           optionalFeatures: ['dom-overlay'],
