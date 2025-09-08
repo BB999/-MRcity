@@ -31,8 +31,12 @@ const GlowingSphere: React.FC = () => {
     const makeMaterial = (color: THREE.Color | number) => new THREE.MeshBasicMaterial({ color });
     const spheres: THREE.Mesh[] = [];
     const lines: { line: THREE.Line, a: number, b: number }[] = [];
-    // 接続グラフ（無向）: 距離3のノード探索に使用
+    // 接続グラフ（無向）: 物理スプリングや探索に使用
     const adjacency: number[][] = Array.from({ length: SPHERE_COUNT }, () => []);
+    // 物理用ベロシティ
+    const velocities: THREE.Vector3[] = [];
+    // スプリングエッジ（チェーン）
+    const edges: { a: number, b: number, rest: number }[] = [];
 
 
     camera.position.z = 5;
@@ -121,15 +125,15 @@ const GlowingSphere: React.FC = () => {
           (mesh as any).userData.hover.base.copy(mesh.position);
         }
         (mesh as any).userData.grabbed = false;
-        // この掴みで引っ張られた球体は、その位置を新しい基準に固定
-        const pulled: Set<number> | undefined = (controller as any).userData?.pulledIndices;
-        if (pulled && pulled.size > 0) {
-          Array.from(pulled).forEach((idx) => {
-            const n = spheres[idx];
-            if (n && (n as any).userData?.hover) {
-              (n as any).userData.hover.base.copy(n.position);
-            }
-          });
+        // ネットワーク全体の現在位置を新しい基準に固定し、エッジ自然長も更新
+        for (const s of spheres) {
+          const hv = (s as any).userData?.hover;
+          if (hv) hv.base.copy(s.position);
+        }
+        for (const e of edges) {
+          const pa = spheres[e.a].position;
+          const pb = spheres[e.b].position;
+          e.rest = pa.distanceTo(pb);
         }
         (controller as any).userData.pulledIndices = undefined;
         (controller as any).userData.grabStart = undefined;
@@ -240,6 +244,7 @@ const GlowingSphere: React.FC = () => {
                 ),
               };
               spheres.push(sphere);
+              velocities.push(new THREE.Vector3());
               scene.add(sphere);
             }
 
@@ -257,76 +262,107 @@ const GlowingSphere: React.FC = () => {
               // 無向グラフとして接続を登録
               adjacency[a].push(b);
               adjacency[b].push(a);
+              // エッジの自然長
+              const pa = new THREE.Vector3();
+              const pb = new THREE.Vector3();
+              spheres[a].getWorldPosition(pa);
+              spheres[b].getWorldPosition(pb);
+              edges.push({ a, b, rest: pa.distanceTo(pb) });
             }
 
             placedRef.current = true;
           }
         }
 
-        // 球体を静かに揺らす（掴まれていないもののみ）
+        // ホバーのターゲットオフセットを更新（ポジションには直接適用しない）
         if (_time !== undefined) {
           const t = _time * 0.001; // ms -> s
           for (const s of spheres) {
             const hv = (s as any).userData?.hover;
             const grabbed = !!(s as any).userData?.grabbed;
             if (!hv || grabbed) continue;
-            const px = hv.base.x + Math.sin(hv.speed.x * t + hv.phase.x) * hv.amp.x;
-            const py = hv.base.y + Math.sin(hv.speed.y * t + hv.phase.y) * hv.amp.y;
-            const pz = hv.base.z + Math.sin(hv.speed.z * t + hv.phase.z) * hv.amp.z;
-            s.position.set(px, py, pz);
+            if (!hv.offset) hv.offset = new THREE.Vector3();
+            hv.offset.set(
+              Math.sin(hv.speed.x * t + hv.phase.x) * hv.amp.x,
+              Math.sin(hv.speed.y * t + hv.phase.y) * hv.amp.y,
+              Math.sin(hv.speed.z * t + hv.phase.z) * hv.amp.z,
+            );
           }
         }
 
-        // 掴んでいる球体があれば、接続グラフ距離ちょうど3のノードのみを減衰付きで引っ張る
-        for (const ctrl of controllersRef.current) {
-          const sel = (ctrl as any).userData?.selected as THREE.Mesh | undefined;
-          if (!sel) continue;
-          const selIdx: number | undefined = (sel as any).userData?.idx;
-          if (selIdx === undefined) continue;
-          const selWorld = new THREE.Vector3();
-          sel.getWorldPosition(selWorld);
-          // BFSで距離3のノードを列挙
-          const dist: number[] = Array(spheres.length).fill(Infinity);
-          const q: number[] = [];
-          dist[selIdx] = 0;
-          q.push(selIdx);
-          for (let qi = 0; qi < q.length; qi++) {
-            const v = q[qi];
-            if (dist[v] >= 3) continue; // 3より先は不要
-            for (const nv of adjacency[v]) {
-              if (dist[nv] > dist[v] + 1) {
-                dist[nv] = dist[v] + 1;
-                q.push(nv);
-              }
+        // 物理更新（マス-スプリング-ダンパー）
+        // 時間刻み
+        const now = _time ?? performance.now();
+        // prevTime をクロージャで保持
+        ;(animate as any)._prevTime = (animate as any)._prevTime ?? now;
+        let dt = (now - (animate as any)._prevTime) / 1000;
+        (animate as any)._prevTime = now;
+        dt = Math.max(0, Math.min(0.033, dt)); // 30fps相当にクランプ
+
+        if (dt > 0) {
+          const kSpring = 12.0; // スプリング剛性
+          const cSpring = 2.5;  // エッジ相対速度ダンピング
+          const kAnchor = 1.2;  // ベース位置への弱い復元
+          const cLinear = 0.8;  // 線形ダンピング（空気抵抗）
+
+          const forces: THREE.Vector3[] = spheres.map(() => new THREE.Vector3());
+
+          // アンカー（ホバーのターゲット）力
+          for (let i = 0; i < spheres.length; i++) {
+            const s = spheres[i];
+            const hv = (s as any).userData?.hover;
+            const grabbed = !!(s as any).userData?.grabbed;
+            if (!hv) continue;
+            const target = hv.base.clone().add(hv.offset ?? new THREE.Vector3());
+            if (!grabbed) {
+              forces[i].addScaledVector(target.clone().sub(s.position), kAnchor);
+            }
+            // 線形ダンピング
+            forces[i].addScaledVector(velocities[i], -cLinear);
+          }
+
+          // エッジスプリングと相対ダンピング
+          for (const e of edges) {
+            const a = e.a, b = e.b;
+            const pa = spheres[a].position;
+            const pb = spheres[b].position;
+            const dir = new THREE.Vector3().subVectors(pb, pa);
+            const len = dir.length();
+            if (len > 1e-6) {
+              dir.multiplyScalar(1 / len);
+              const x = len - e.rest; // 伸び
+              const fMag = kSpring * x;
+              const relVel = new THREE.Vector3().subVectors(velocities[b], velocities[a]);
+              const damp = cSpring * relVel.dot(dir);
+              const f = dir.clone().multiplyScalar(fMag + damp);
+              forces[a].add(f);
+              forces[b].addScaledVector(f, -1);
             }
           }
 
-          // 変位ベクトル（掴み開始からの移動分）
-          const grabStart: THREE.Vector3 | undefined = (ctrl as any).userData?.grabStart;
-          const disp = new THREE.Vector3();
-          if (grabStart) {
-            disp.copy(selWorld).sub(grabStart);
-          } else {
-            disp.set(0, 0, 0);
+          // 掴まれている球はコントローラに追従（位置を直接合わせ、速度を抑制）
+          for (const ctrl of controllersRef.current) {
+            const sel = (ctrl as any).userData?.selected as THREE.Mesh | undefined;
+            if (!sel) continue;
+            const selIdx: number | undefined = (sel as any).userData?.idx;
+            if (selIdx === undefined) continue;
+            const selWorld = new THREE.Vector3();
+            sel.getWorldPosition(selWorld);
+            spheres[selIdx].position.lerp(selWorld, 0.9);
+            velocities[selIdx].set(0, 0, 0);
+            // アンカー/スプリング力は別頂点から伝播するのでここでは適用しない
           }
-          const eps2 = 0.002 * 0.002; // 約2mmのしきい値
 
-          for (let i = 0; i < dist.length; i++) {
-            if (dist[i] !== 3) continue; // ちょうど距離3のみ
-            const n = spheres[i];
-            if ((n as any).userData?.grabbed) continue;
-            // 掴んだ直後（移動していない間）は影響しない
-            if (disp.lengthSq() < eps2) continue;
-            // 目標は「掴み開始時の各球の基準位置 + 掴んだ球の変位」
-            const hv = (n as any).userData?.hover;
-            if (!hv || !hv.base) continue;
-            const target = (hv.base as THREE.Vector3).clone().add(disp);
-            const alpha = 0.65; // 一定の強い追従
-            n.position.lerp(target, alpha);
-            // 影響を受けたことを記録
-            const set: Set<number> = (ctrl as any).userData.pulledIndices || new Set<number>();
-            set.add(i);
-            (ctrl as any).userData.pulledIndices = set;
+          // 積分（Semi-Implicit Euler）
+          for (let i = 0; i < spheres.length; i++) {
+            const v = velocities[i];
+            v.addScaledVector(forces[i], dt); // m=1 とする
+            // 速度クランプで暴走防止
+            const vmax = 5.0;
+            if (v.lengthSq() > vmax * vmax) {
+              v.setLength(vmax);
+            }
+            spheres[i].position.addScaledVector(v, dt);
           }
         }
 
