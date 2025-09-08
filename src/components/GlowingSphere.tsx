@@ -9,6 +9,7 @@ const GlowingSphere: React.FC = () => {
   const [isXRSupported, setIsXRSupported] = useState(false);
   const placedRef = useRef(false);
   const controllersRef = useRef<THREE.Group[]>([]);
+  const SPHERE_COUNT = 24; // 12対 = 24個
   const INITIAL_DISTANCE = 0.08; // m: XR開始時の初期距離（より手前に）
 
   useEffect(() => {
@@ -25,14 +26,11 @@ const GlowingSphere: React.FC = () => {
     renderer.setSize(window.innerWidth, window.innerHeight);
     mountRef.current.appendChild(renderer.domElement);
 
-    // 球体のジオメトリとマテリアル（直径約20cm）
-    const geometry = new THREE.SphereGeometry(0.1, 32, 16);
-    const material = new THREE.MeshBasicMaterial({
-      color: 0x00ff88,
-    });
-
-    const cube = new THREE.Mesh(geometry, material);
-    scene.add(cube);
+    // 球体（複数）とライン
+    const sphereGeometry = new THREE.SphereGeometry(0.08, 32, 16);
+    const makeMaterial = () => new THREE.MeshBasicMaterial({ color: 0x00ff88 });
+    const spheres: THREE.Mesh[] = [];
+    const lines: { line: THREE.Line, a: number, b: number }[] = [];
 
 
     camera.position.z = 5;
@@ -55,23 +53,24 @@ const GlowingSphere: React.FC = () => {
     const worldQuat = new THREE.Quaternion();
     const forwardVec = new THREE.Vector3();
 
-    const intersectWithCube = (controller: THREE.Object3D) => {
+    const intersectWithSpheres = (controller: THREE.Object3D) => {
       tempMatrix.identity().extractRotation(controller.matrixWorld);
       const origin = new THREE.Vector3().setFromMatrixPosition(controller.matrixWorld);
       const direction = new THREE.Vector3(0, 0, -1).applyMatrix4(tempMatrix);
       raycaster.set(origin, direction);
-      return raycaster.intersectObject(cube, false);
+      return raycaster.intersectObjects(spheres, false);
     };
 
     const onSelectStart = (event: any) => {
       const controller: THREE.Group = event.target;
-      const intersections = intersectWithCube(controller);
+      const intersections = intersectWithSpheres(controller);
       if (intersections.length > 0) {
-        controller.userData.selected = cube;
-        if ((cube.material as THREE.Material) && (cube.material as any).color) {
-          (cube.material as any).color.set(0xffff55);
+        const picked = intersections[0].object as THREE.Mesh;
+        controller.userData.selected = picked;
+        if ((picked.material as THREE.Material) && (picked.material as any).color) {
+          (picked.material as any).color.set(0xffff55);
         }
-        controller.attach(cube);
+        controller.attach(picked);
       }
     };
 
@@ -85,8 +84,8 @@ const GlowingSphere: React.FC = () => {
         scene.add(selected);
         selected.position.copy(worldPos);
         (selected as any).quaternion.copy(worldQuat);
-        if ((cube.material as THREE.Material) && (cube.material as any).color) {
-          (cube.material as any).color.set(0x00ff88);
+        if (((selected as any).material as THREE.Material) && ((selected as any).material as any).color) {
+          ((selected as any).material as any).color.set(0x00ff88);
         }
         controller.userData.selected = undefined;
       }
@@ -141,27 +140,71 @@ const GlowingSphere: React.FC = () => {
         if (!placedRef.current) {
           const ctrl = controllersRef.current[0] || controllersRef.current[1];
           if (ctrl) {
-            // コントローラー先端の少し前に初期配置
+            // 基準点: コントローラー先端
             tempMatrix.identity().extractRotation(ctrl.matrixWorld);
-            worldPos.setFromMatrixPosition(ctrl.matrixWorld);
-            forwardVec.set(0, 0, -1).applyMatrix4(tempMatrix).normalize();
-            cube.position.copy(worldPos).add(forwardVec.multiplyScalar(INITIAL_DISTANCE));
-            ctrl.getWorldQuaternion(worldQuat);
-            cube.quaternion.copy(worldQuat);
+            const basePos = new THREE.Vector3().setFromMatrixPosition(ctrl.matrixWorld);
+            const baseDir = new THREE.Vector3(0, 0, -1).applyMatrix4(tempMatrix).normalize();
+
+            // ランダム配置（0.6m立方内、重なり回避）
+            const placedPositions: THREE.Vector3[] = [];
+            const tryPlace = () => {
+              const offset = new THREE.Vector3(
+                (Math.random() - 0.5) * 0.6,
+                (Math.random() - 0.3) * 0.4, // 少し上寄り
+                (Math.random() - 0.2) * 0.6
+              );
+              // 先端から少し前方へベース距離
+              const candidate = basePos.clone().add(baseDir.clone().multiplyScalar(INITIAL_DISTANCE + Math.random() * 0.2)).add(offset);
+              // 最小間隔（直径の1.5倍）
+              const minDist = 0.08 * 2 * 1.5;
+              if (placedPositions.every(p => p.distanceTo(candidate) > minDist)) {
+                placedPositions.push(candidate);
+                return candidate;
+              }
+              return null;
+            };
+
+            for (let i = 0; i < SPHERE_COUNT; i++) {
+              let pos: THREE.Vector3 | null = null;
+              for (let t = 0; t < 200 && !pos; t++) pos = tryPlace();
+              if (!pos) pos = basePos.clone().add(new THREE.Vector3(i * 0.15, 0, 0));
+
+              const sphere = new THREE.Mesh(sphereGeometry, makeMaterial());
+              sphere.position.copy(pos);
+              spheres.push(sphere);
+              scene.add(sphere);
+            }
+
+            // 連結（チェーン）：0-1-2-...-N （各球の次数<=2）
+            for (let i = 0; i < SPHERE_COUNT - 1; i++) {
+              const a = i;
+              const b = i + 1;
+              const geom = new THREE.BufferGeometry().setFromPoints([
+                new THREE.Vector3(),
+                new THREE.Vector3(),
+              ]);
+              const line = new THREE.Line(geom, new THREE.LineBasicMaterial({ color: 0xffffff }));
+              scene.add(line);
+              lines.push({ line, a, b });
+            }
+
             placedRef.current = true;
           }
         }
-      } else {
-        // 非XR時は軽く漂わせる
-        const time = Date.now() * 0.001;
-        cube.position.x = Math.sin(time) * 0.5;
-        cube.position.y = Math.cos(time * 1.2) * 0.3;
-        cube.position.z = Math.sin(time * 0.8) * 0.2;
 
-        // ゆっくりとした回転
-        cube.rotation.x += 0.005;
-        cube.rotation.y += 0.003;
-        cube.rotation.z += 0.002;
+        // ラインの更新（毎フレーム）
+        for (const { line, a, b } of lines) {
+          const pa = new THREE.Vector3();
+          const pb = new THREE.Vector3();
+          spheres[a].getWorldPosition(pa);
+          spheres[b].getWorldPosition(pb);
+          const posAttr = line.geometry.getAttribute('position') as THREE.BufferAttribute;
+          posAttr.setXYZ(0, pa.x, pa.y, pa.z);
+          posAttr.setXYZ(1, pb.x, pb.y, pb.z);
+          posAttr.needsUpdate = true;
+        }
+      } else {
+        // 非XR時: 何もしない（必要ならデモ用アニメを入れられます）
       }
       
       renderer.render(scene, camera);
@@ -198,8 +241,14 @@ const GlowingSphere: React.FC = () => {
       }
       controls.dispose();
       renderer.dispose();
-      geometry.dispose();
-      material.dispose();
+      sphereGeometry.dispose();
+      // マテリアルとラインの破棄
+      scene.traverse((obj) => {
+        if ((obj as any).isLine) {
+          (obj as THREE.Line).geometry.dispose();
+          ((obj as THREE.Line).material as THREE.Material).dispose();
+        }
+      });
     };
   }, []);
 
