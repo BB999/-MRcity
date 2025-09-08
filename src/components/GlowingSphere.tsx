@@ -9,6 +9,7 @@ const GlowingSphere: React.FC = () => {
   const [isXRSupported, setIsXRSupported] = useState(false);
   const placedRef = useRef(false);
   const controllersRef = useRef<THREE.Group[]>([]);
+  const INITIAL_DISTANCE = 0.08; // m: XR開始時の初期距離（より手前に）
 
   useEffect(() => {
     if (!mountRef.current) return;
@@ -24,8 +25,8 @@ const GlowingSphere: React.FC = () => {
     renderer.setSize(window.innerWidth, window.innerHeight);
     mountRef.current.appendChild(renderer.domElement);
 
-    // 立方体のジオメトリとマテリアル
-    const geometry = new THREE.BoxGeometry(0.2, 0.2, 0.2);
+    // 球体のジオメトリとマテリアル（直径約20cm）
+    const geometry = new THREE.SphereGeometry(0.1, 32, 16);
     const material = new THREE.MeshBasicMaterial({
       color: 0x00ff88,
     });
@@ -52,6 +53,7 @@ const GlowingSphere: React.FC = () => {
     const tempMatrix = new THREE.Matrix4();
     const worldPos = new THREE.Vector3();
     const worldQuat = new THREE.Quaternion();
+    const forwardVec = new THREE.Vector3();
 
     const intersectWithCube = (controller: THREE.Object3D) => {
       tempMatrix.identity().extractRotation(controller.matrixWorld);
@@ -137,9 +139,13 @@ const GlowingSphere: React.FC = () => {
       // XR中は一度だけカメラ前方に配置して以後は固定
       if (renderer.xr.isPresenting) {
         if (!placedRef.current) {
-          const dir = new THREE.Vector3(0, 0, -1).applyQuaternion(camera.quaternion);
-          cube.position.copy(camera.position).add(dir.multiplyScalar(0.25));
-          cube.quaternion.copy(camera.quaternion);
+          const xrCam = renderer.xr.getCamera(camera as any) as THREE.Camera;
+          // XRカメラのワールド位置・方向から近距離に配置
+          xrCam.getWorldPosition(worldPos);
+          xrCam.getWorldDirection(forwardVec); // カメラの視線方向（正面）
+          cube.position.copy(worldPos).add(forwardVec.multiplyScalar(INITIAL_DISTANCE));
+          xrCam.getWorldQuaternion(worldQuat);
+          cube.quaternion.copy(worldQuat);
           placedRef.current = true;
         }
       } else {
