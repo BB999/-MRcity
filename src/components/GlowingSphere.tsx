@@ -7,6 +7,7 @@ const GlowingSphere: React.FC = () => {
   const sceneRef = useRef<THREE.Scene | null>(null);
   const rendererRef = useRef<THREE.WebGLRenderer | null>(null);
   const [isXRSupported, setIsXRSupported] = useState(false);
+  const placedRef = useRef(false);
 
   useEffect(() => {
     if (!mountRef.current) return;
@@ -53,17 +54,20 @@ const GlowingSphere: React.FC = () => {
     }
 
     // アニメーション
-    const animate = () => {
+    const animate = (_time?: number, _frame?: XRFrame) => {
       // controlsをアップデート（XRモードでない場合のみ）
       if (!renderer.xr.isPresenting) {
         controls.update();
       }
       
-      // XR中はカメラの正面に常に表示
+      // XR中は一度だけカメラ前方に配置して以後は固定
       if (renderer.xr.isPresenting) {
-        const dir = new THREE.Vector3(0, 0, -1).applyQuaternion(camera.quaternion);
-        cube.position.copy(camera.position).add(dir.multiplyScalar(0.6));
-        cube.quaternion.copy(camera.quaternion);
+        if (!placedRef.current) {
+          const dir = new THREE.Vector3(0, 0, -1).applyQuaternion(camera.quaternion);
+          cube.position.copy(camera.position).add(dir.multiplyScalar(0.6));
+          cube.quaternion.copy(camera.quaternion);
+          placedRef.current = true;
+        }
       } else {
         // 非XR時は軽く漂わせる
         const time = Date.now() * 0.001;
@@ -99,6 +103,7 @@ const GlowingSphere: React.FC = () => {
     return () => {
       window.removeEventListener('resize', handleResize);
       renderer.setAnimationLoop(null);
+      placedRef.current = false;
       if (currentMount && renderer.domElement) {
         currentMount.removeChild(renderer.domElement);
       }
@@ -119,7 +124,11 @@ const GlowingSphere: React.FC = () => {
           optionalFeatures: ['dom-overlay'],
           domOverlay: { root: document.body }
         });
+        placedRef.current = false;
         await rendererRef.current.xr.setSession(session);
+        session.addEventListener('end', () => {
+          placedRef.current = false;
+        });
       } catch (error) {
         console.error('XRセッション開始エラー:', error);
       }
