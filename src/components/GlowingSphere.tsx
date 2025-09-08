@@ -1,6 +1,6 @@
 import React, { useRef, useEffect, useState } from 'react';
 import * as THREE from 'three';
-import { OrbitControls } from 'three-stdlib';
+import { OrbitControls, XRControllerModelFactory } from 'three-stdlib';
 
 const GlowingSphere: React.FC = () => {
   const mountRef = useRef<HTMLDivElement>(null);
@@ -8,6 +8,7 @@ const GlowingSphere: React.FC = () => {
   const rendererRef = useRef<THREE.WebGLRenderer | null>(null);
   const [isXRSupported, setIsXRSupported] = useState(false);
   const placedRef = useRef(false);
+  const controllersRef = useRef<THREE.Group[]>([]);
 
   useEffect(() => {
     if (!mountRef.current) return;
@@ -46,6 +47,79 @@ const GlowingSphere: React.FC = () => {
     sceneRef.current = scene;
     rendererRef.current = renderer;
 
+    // XR コントローラ設定（掴み）
+    const raycaster = new THREE.Raycaster();
+    const tempMatrix = new THREE.Matrix4();
+    const worldPos = new THREE.Vector3();
+    const worldQuat = new THREE.Quaternion();
+
+    const intersectWithCube = (controller: THREE.Object3D) => {
+      tempMatrix.identity().extractRotation(controller.matrixWorld);
+      const origin = new THREE.Vector3().setFromMatrixPosition(controller.matrixWorld);
+      const direction = new THREE.Vector3(0, 0, -1).applyMatrix4(tempMatrix);
+      raycaster.set(origin, direction);
+      return raycaster.intersectObject(cube, false);
+    };
+
+    const onSelectStart = (event: any) => {
+      const controller: THREE.Group = event.target;
+      const intersections = intersectWithCube(controller);
+      if (intersections.length > 0) {
+        controller.userData.selected = cube;
+        if ((cube.material as THREE.Material) && (cube.material as any).color) {
+          (cube.material as any).color.set(0xffff55);
+        }
+        controller.attach(cube);
+      }
+    };
+
+    const onSelectEnd = (event: any) => {
+      const controller: THREE.Group = event.target;
+      const selected: THREE.Object3D | undefined = controller.userData.selected;
+      if (selected) {
+        // ワールド変換を保持してからシーンに戻す
+        selected.getWorldPosition(worldPos);
+        selected.getWorldQuaternion(worldQuat);
+        scene.add(selected);
+        selected.position.copy(worldPos);
+        (selected as any).quaternion.copy(worldQuat);
+        if ((cube.material as THREE.Material) && (cube.material as any).color) {
+          (cube.material as any).color.set(0x00ff88);
+        }
+        controller.userData.selected = undefined;
+      }
+    };
+
+    const buildController = (index: number) => {
+      const controller = renderer.xr.getController(index);
+      controller.addEventListener('selectstart', onSelectStart);
+      controller.addEventListener('selectend', onSelectEnd);
+      scene.add(controller);
+
+      // 可視レイ
+      const geometry = new THREE.BufferGeometry().setFromPoints([
+        new THREE.Vector3(0, 0, 0),
+        new THREE.Vector3(0, 0, -1),
+      ]);
+      const line = new THREE.Line(
+        geometry,
+        new THREE.LineBasicMaterial({ color: 0x00ff88 })
+      );
+      line.name = 'ray';
+      line.scale.z = 0.2;
+      controller.add(line);
+
+      const controllerGrip = renderer.xr.getControllerGrip(index);
+      const modelFactory = new XRControllerModelFactory();
+      controllerGrip.add(modelFactory.createControllerModel(controllerGrip));
+      scene.add(controllerGrip);
+
+      controllersRef.current.push(controller);
+    };
+
+    buildController(0);
+    buildController(1);
+
     // WebXRサポートチェック
     if ('xr' in navigator) {
       (navigator as any).xr?.isSessionSupported('immersive-ar').then((supported: boolean) => {
@@ -64,7 +138,7 @@ const GlowingSphere: React.FC = () => {
       if (renderer.xr.isPresenting) {
         if (!placedRef.current) {
           const dir = new THREE.Vector3(0, 0, -1).applyQuaternion(camera.quaternion);
-          cube.position.copy(camera.position).add(dir.multiplyScalar(0.6));
+          cube.position.copy(camera.position).add(dir.multiplyScalar(0.25));
           cube.quaternion.copy(camera.quaternion);
           placedRef.current = true;
         }
@@ -104,6 +178,12 @@ const GlowingSphere: React.FC = () => {
       window.removeEventListener('resize', handleResize);
       renderer.setAnimationLoop(null);
       placedRef.current = false;
+      // コントローラのイベント解除
+      controllersRef.current.forEach((c) => {
+        c.removeEventListener('selectstart', onSelectStart);
+        c.removeEventListener('selectend', onSelectEnd);
+      });
+      controllersRef.current = [];
       if (currentMount && renderer.domElement) {
         currentMount.removeChild(renderer.domElement);
       }
