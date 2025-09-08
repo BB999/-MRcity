@@ -139,14 +139,17 @@ const GlowingSphere: React.FC = () => {
       // XR中は一度だけカメラ前方に配置して以後は固定
       if (renderer.xr.isPresenting) {
         if (!placedRef.current) {
-          const xrCam = renderer.xr.getCamera(camera as any) as THREE.Camera;
-          // XRカメラのワールド位置・方向から近距離に配置
-          xrCam.getWorldPosition(worldPos);
-          xrCam.getWorldDirection(forwardVec); // カメラの視線方向（正面）
-          cube.position.copy(worldPos).add(forwardVec.multiplyScalar(INITIAL_DISTANCE));
-          xrCam.getWorldQuaternion(worldQuat);
-          cube.quaternion.copy(worldQuat);
-          placedRef.current = true;
+          const ctrl = controllersRef.current[0] || controllersRef.current[1];
+          if (ctrl) {
+            // コントローラー先端の少し前に初期配置
+            tempMatrix.identity().extractRotation(ctrl.matrixWorld);
+            worldPos.setFromMatrixPosition(ctrl.matrixWorld);
+            forwardVec.set(0, 0, -1).applyMatrix4(tempMatrix).normalize();
+            cube.position.copy(worldPos).add(forwardVec.multiplyScalar(INITIAL_DISTANCE));
+            ctrl.getWorldQuaternion(worldQuat);
+            cube.quaternion.copy(worldQuat);
+            placedRef.current = true;
+          }
         }
       } else {
         // 非XR時は軽く漂わせる
