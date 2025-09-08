@@ -96,9 +96,8 @@ const GlowingSphere: React.FC = () => {
           const highlight = lightenColor(picked.userData.baseColor.clone(), 1.5);
           ((picked.material as any).color as THREE.Color).copy(highlight);
         }
-        // 揺れを停止（掴み中）
+        // 揺れを停止（掴み中）。親は変えず物理側で追従させる
         (picked as any).userData.grabbed = true;
-        controller.attach(picked);
       }
     };
 
@@ -106,12 +105,6 @@ const GlowingSphere: React.FC = () => {
       const controller: THREE.Group = event.target;
       const selected: THREE.Object3D | undefined = controller.userData.selected;
       if (selected) {
-        // ワールド変換を保持してからシーンに戻す
-        selected.getWorldPosition(worldPos);
-        selected.getWorldQuaternion(worldQuat);
-        scene.add(selected);
-        selected.position.copy(worldPos);
-        (selected as any).quaternion.copy(worldQuat);
         if (((selected as any).material as THREE.Material) && ((selected as any).material as any).color) {
           const mesh = selected as THREE.Mesh;
           const base = (mesh.userData && mesh.userData.baseColor) ? mesh.userData.baseColor as THREE.Color : null;
@@ -348,7 +341,8 @@ const GlowingSphere: React.FC = () => {
             if (selIdx === undefined) continue;
             const selWorld = new THREE.Vector3();
             sel.getWorldPosition(selWorld);
-            spheres[selIdx].position.lerp(selWorld, 0.9);
+            // 親はsceneのまま、ワールド位置へハード追従
+            spheres[selIdx].position.copy(selWorld);
             velocities[selIdx].set(0, 0, 0);
             // アンカー/スプリング力は別頂点から伝播するのでここでは適用しない
           }
