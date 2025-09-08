@@ -28,7 +28,7 @@ const GlowingSphere: React.FC = () => {
 
     // 球体（複数）とライン
     const sphereGeometry = new THREE.SphereGeometry(0.08, 32, 16);
-    const makeMaterial = () => new THREE.MeshBasicMaterial({ color: 0x00ff88 });
+    const makeMaterial = (color: THREE.Color | number) => new THREE.MeshBasicMaterial({ color });
     const spheres: THREE.Mesh[] = [];
     const lines: { line: THREE.Line, a: number, b: number }[] = [];
 
@@ -60,6 +60,16 @@ const GlowingSphere: React.FC = () => {
       return raycaster.intersectObjects(spheres, false);
     };
 
+    const lightenColor = (src: THREE.Color, factor: number) => {
+      // HSL 空間で輝度を上げてハイライト
+      const hsl = { h: 0, s: 0, l: 0 } as any;
+      src.getHSL(hsl);
+      hsl.l = Math.min(1, hsl.l * factor);
+      const out = src.clone();
+      out.setHSL(hsl.h, hsl.s, hsl.l);
+      return out;
+    };
+
     const onSelectStart = (event: any) => {
       const controller: THREE.Group = event.target;
       const intersections = intersectWithSpheres(controller);
@@ -67,8 +77,15 @@ const GlowingSphere: React.FC = () => {
         const picked = intersections[0].object as THREE.Mesh;
         controller.userData.selected = picked;
         if ((picked.material as THREE.Material) && (picked.material as any).color) {
-          (picked.material as any).color.set(0xffff55);
+          // 基本色を保持していなければ保存
+          if (!picked.userData.baseColor) {
+            picked.userData.baseColor = ((picked.material as any).color as THREE.Color).clone();
+          }
+          const highlight = lightenColor(picked.userData.baseColor.clone(), 1.5);
+          ((picked.material as any).color as THREE.Color).copy(highlight);
         }
+        // 揺れを停止（掴み中）
+        (picked as any).userData.grabbed = true;
         controller.attach(picked);
       }
     };
@@ -84,8 +101,18 @@ const GlowingSphere: React.FC = () => {
         selected.position.copy(worldPos);
         (selected as any).quaternion.copy(worldQuat);
         if (((selected as any).material as THREE.Material) && ((selected as any).material as any).color) {
-          ((selected as any).material as any).color.set(0x00ff88);
+          const mesh = selected as THREE.Mesh;
+          const base = (mesh.userData && mesh.userData.baseColor) ? mesh.userData.baseColor as THREE.Color : null;
+          if (base) {
+            (((selected as any).material as any).color as THREE.Color).copy(base);
+          }
         }
+        // 新しい基準位置に更新し、揺れを再開
+        const mesh = selected as THREE.Mesh;
+        if ((mesh as any).userData?.hover) {
+          (mesh as any).userData.hover.base.copy(mesh.position);
+        }
+        (mesh as any).userData.grabbed = false;
         controller.userData.selected = undefined;
       }
     };
@@ -167,9 +194,30 @@ const GlowingSphere: React.FC = () => {
               let pos: THREE.Vector3 | null = null;
               for (let t = 0; t < 200 && !pos; t++) pos = tryPlace();
               if (!pos) pos = basePos.clone().add(new THREE.Vector3(i * 0.15, 0, 0));
-
-              const sphere = new THREE.Mesh(sphereGeometry, makeMaterial());
+              // HSLで均等に色相を振って個性を付与
+              const baseColor = new THREE.Color().setHSL((i / SPHERE_COUNT), 0.7, 0.5);
+              const sphere = new THREE.Mesh(sphereGeometry, makeMaterial(baseColor));
               sphere.position.copy(pos);
+              sphere.userData.baseColor = baseColor.clone();
+              // ホバー（静かに揺れる）用の基準とパラメータ
+              sphere.userData.hover = {
+                base: pos.clone(),
+                amp: new THREE.Vector3(
+                  0.012 + Math.random() * 0.01,
+                  0.016 + Math.random() * 0.012,
+                  0.012 + Math.random() * 0.01
+                ),
+                phase: new THREE.Vector3(
+                  Math.random() * Math.PI * 2,
+                  Math.random() * Math.PI * 2,
+                  Math.random() * Math.PI * 2
+                ),
+                speed: new THREE.Vector3(
+                  0.3 + Math.random() * 0.2,
+                  0.25 + Math.random() * 0.2,
+                  0.28 + Math.random() * 0.2
+                ),
+              };
               spheres.push(sphere);
               scene.add(sphere);
             }
@@ -188,6 +236,20 @@ const GlowingSphere: React.FC = () => {
             }
 
             placedRef.current = true;
+          }
+        }
+
+        // 球体を静かに揺らす（掴まれていないもののみ）
+        if (_time !== undefined) {
+          const t = _time * 0.001; // ms -> s
+          for (const s of spheres) {
+            const hv = (s as any).userData?.hover;
+            const grabbed = !!(s as any).userData?.grabbed;
+            if (!hv || grabbed) continue;
+            const px = hv.base.x + Math.sin(hv.speed.x * t + hv.phase.x) * hv.amp.x;
+            const py = hv.base.y + Math.sin(hv.speed.y * t + hv.phase.y) * hv.amp.y;
+            const pz = hv.base.z + Math.sin(hv.speed.z * t + hv.phase.z) * hv.amp.z;
+            s.position.set(px, py, pz);
           }
         }
 
