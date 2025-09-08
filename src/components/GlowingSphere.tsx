@@ -92,8 +92,8 @@ const GlowingSphere: React.FC = () => {
 
     const buildController = (index: number) => {
       const controller = renderer.xr.getController(index);
-      controller.addEventListener('selectstart', onSelectStart);
-      controller.addEventListener('selectend', onSelectEnd);
+      (controller as any).addEventListener('selectstart', onSelectStart);
+      (controller as any).addEventListener('selectend', onSelectEnd);
       scene.add(controller);
 
       // 可視レイ
@@ -180,8 +180,8 @@ const GlowingSphere: React.FC = () => {
       placedRef.current = false;
       // コントローラのイベント解除
       controllersRef.current.forEach((c) => {
-        c.removeEventListener('selectstart', onSelectStart);
-        c.removeEventListener('selectend', onSelectEnd);
+        (c as any).removeEventListener('selectstart', onSelectStart);
+        (c as any).removeEventListener('selectend', onSelectEnd);
       });
       controllersRef.current = [];
       if (currentMount && renderer.domElement) {
