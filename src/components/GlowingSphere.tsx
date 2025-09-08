@@ -80,6 +80,10 @@ const GlowingSphere: React.FC = () => {
         controller.userData.selected = picked;
         // この掴みで影響を受けたインデックスを追跡
         (controller as any).userData.pulledIndices = new Set<number>();
+        // 掴み開始時の基準位置（ワールド）を記録
+        const startWorld = new THREE.Vector3();
+        picked.getWorldPosition(startWorld);
+        (controller as any).userData.grabStart = startWorld.clone();
         if ((picked.material as THREE.Material) && (picked.material as any).color) {
           // 基本色を保持していなければ保存
           if (!picked.userData.baseColor) {
@@ -128,6 +132,7 @@ const GlowingSphere: React.FC = () => {
           });
         }
         (controller as any).userData.pulledIndices = undefined;
+        (controller as any).userData.grabStart = undefined;
         controller.userData.selected = undefined;
       }
     };
@@ -296,13 +301,28 @@ const GlowingSphere: React.FC = () => {
             }
           }
 
+          // 変位ベクトル（掴み開始からの移動分）
+          const grabStart: THREE.Vector3 | undefined = (ctrl as any).userData?.grabStart;
+          const disp = new THREE.Vector3();
+          if (grabStart) {
+            disp.copy(selWorld).sub(grabStart);
+          } else {
+            disp.set(0, 0, 0);
+          }
+          const eps2 = 0.002 * 0.002; // 約2mmのしきい値
+
           for (let i = 0; i < dist.length; i++) {
             if (dist[i] !== 3) continue; // ちょうど距離3のみ
             const n = spheres[i];
             if ((n as any).userData?.grabbed) continue;
-            // 距離（物理的な距離）に依存しない一定強度で引っ張る
+            // 掴んだ直後（移動していない間）は影響しない
+            if (disp.lengthSq() < eps2) continue;
+            // 目標は「掴み開始時の各球の基準位置 + 掴んだ球の変位」
+            const hv = (n as any).userData?.hover;
+            if (!hv || !hv.base) continue;
+            const target = (hv.base as THREE.Vector3).clone().add(disp);
             const alpha = 0.65; // 一定の強い追従
-            n.position.lerp(selWorld, alpha);
+            n.position.lerp(target, alpha);
             // 影響を受けたことを記録
             const set: Set<number> = (ctrl as any).userData.pulledIndices || new Set<number>();
             set.add(i);
