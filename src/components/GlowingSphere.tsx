@@ -199,6 +199,7 @@ const GlowingSphere: React.FC = () => {
               const sphere = new THREE.Mesh(sphereGeometry, makeMaterial(baseColor));
               sphere.position.copy(pos);
               sphere.userData.baseColor = baseColor.clone();
+              sphere.userData.idx = i;
               // ホバー（静かに揺れる）用の基準とパラメータ
               sphere.userData.hover = {
                 base: pos.clone(),
@@ -251,6 +252,34 @@ const GlowingSphere: React.FC = () => {
             const pz = hv.base.z + Math.sin(hv.speed.z * t + hv.phase.z) * hv.amp.z;
             s.position.set(px, py, pz);
           }
+        }
+
+        // 掴んでいる球体があれば、±1と±2の接続にも減衰付きで引っ張り影響
+        for (const ctrl of controllersRef.current) {
+          const sel = (ctrl as any).userData?.selected as THREE.Mesh | undefined;
+          if (!sel) continue;
+          const selIdx: number | undefined = (sel as any).userData?.idx;
+          if (selIdx === undefined) continue;
+          const selWorld = new THREE.Vector3();
+          sel.getWorldPosition(selWorld);
+          const applyPull = (neighborIdx: number, graphDist: number) => {
+            if (neighborIdx < 0 || neighborIdx >= spheres.length) return;
+            const n = spheres[neighborIdx];
+            if ((n as any).userData?.grabbed) return;
+            // 基本はチェーン距離による重み、距離が近いほど強く
+            const baseWeight = graphDist === 1 ? 0.22 : 0.12;
+            const nWorld = new THREE.Vector3();
+            n.getWorldPosition(nWorld);
+            const d = nWorld.distanceTo(selWorld);
+            const distAtten = 1 / (1 + d * 2.5); // 近いほど1に近づく
+            const alpha = baseWeight * distAtten;
+            // 現在位置を選択球に向けて補間
+            n.position.lerp(selWorld, alpha);
+          };
+          applyPull(selIdx - 1, 1);
+          applyPull(selIdx + 1, 1);
+          applyPull(selIdx - 2, 2);
+          applyPull(selIdx + 2, 2);
         }
 
         // ラインの更新（毎フレーム）
