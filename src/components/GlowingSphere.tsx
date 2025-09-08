@@ -51,7 +51,6 @@ const GlowingSphere: React.FC = () => {
     const tempMatrix = new THREE.Matrix4();
     const worldPos = new THREE.Vector3();
     const worldQuat = new THREE.Quaternion();
-    const forwardVec = new THREE.Vector3();
 
     const intersectWithSpheres = (controller: THREE.Object3D) => {
       tempMatrix.identity().extractRotation(controller.matrixWorld);
