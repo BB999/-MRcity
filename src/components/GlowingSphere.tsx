@@ -55,8 +55,6 @@ const GlowingSphere: React.FC = () => {
     // XR コントローラ設定（掴み）
     const raycaster = new THREE.Raycaster();
     const tempMatrix = new THREE.Matrix4();
-    const worldPos = new THREE.Vector3();
-    const worldQuat = new THREE.Quaternion();
 
     const intersectWithSpheres = (controller: THREE.Object3D) => {
       tempMatrix.identity().extractRotation(controller.matrixWorld);
