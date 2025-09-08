@@ -82,10 +82,13 @@ const GlowingSphere: React.FC = () => {
         controller.userData.selected = picked;
         // この掴みで影響を受けたインデックスを追跡
         (controller as any).userData.pulledIndices = new Set<number>();
-        // 掴み開始時の基準位置（ワールド）を記録
+        // 掴み開始時のオフセット（コントローラ座標系）を記録
         const startWorld = new THREE.Vector3();
         picked.getWorldPosition(startWorld);
+        const invCtrl = new THREE.Matrix4().copy(controller.matrixWorld).invert();
+        const localOffset = startWorld.clone().applyMatrix4(invCtrl);
         (controller as any).userData.grabStart = startWorld.clone();
+        (controller as any).userData.grabLocalOffset = localOffset.clone();
         if ((picked.material as THREE.Material) && (picked.material as any).color) {
           // 基本色を保持していなければ保存
           if (!picked.userData.baseColor) {
@@ -337,10 +340,11 @@ const GlowingSphere: React.FC = () => {
             if (!sel) continue;
             const selIdx: number | undefined = (sel as any).userData?.idx;
             if (selIdx === undefined) continue;
-            const selWorld = new THREE.Vector3();
-            sel.getWorldPosition(selWorld);
+            // コントローラ座標系での掴みオフセットをワールドへ変換
+            const localOffset: THREE.Vector3 | undefined = (ctrl as any).userData?.grabLocalOffset;
+            const target = (localOffset ? localOffset.clone() : new THREE.Vector3()).applyMatrix4(ctrl.matrixWorld);
             // 親はsceneのまま、ワールド位置へハード追従
-            spheres[selIdx].position.copy(selWorld);
+            spheres[selIdx].position.copy(target);
             velocities[selIdx].set(0, 0, 0);
             // アンカー/スプリング力は別頂点から伝播するのでここでは適用しない
           }
