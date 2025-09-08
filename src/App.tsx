@@ -134,9 +134,9 @@ function DraggableNode({ node, onPositionChange, isXR }) {
         <meshStandardMaterial
           color={node.color}
           emissive={node.color}
-          emissiveIntensity={1.2}
-          transparent
-          opacity={0.9}
+          emissiveIntensity={isXR ? 2.0 : 1.2}
+          transparent={!isXR}
+          opacity={isXR ? 1.0 : 0.9}
           roughness={0.1}
           metalness={0.2}
         />
@@ -169,12 +169,12 @@ function NodeNetwork({ xrMode }) {
       initialNodes.push({
         id: i,
         position: [
-          (Math.random() - 0.5) * (xrMode === 'ar' ? 3 : 15),
-          (Math.random() - 0.5) * (xrMode === 'ar' ? 3 : 15),
-          (Math.random() - 0.5) * (xrMode === 'ar' ? 3 : 15)
+          (Math.random() - 0.5) * 4,
+          (Math.random() - 0.5) * 4,
+          (Math.random() - 0.5) * 4
         ],
         color: colors[Math.floor(Math.random() * colors.length)],
-        size: Math.random() * 0.3 + 0.1,
+        size: Math.random() * 0.3 + 0.2,
         glow: Math.random() * 2 + 1
       })
     }
@@ -318,13 +318,13 @@ function NodeNetwork({ xrMode }) {
         
         return (
           <mesh key={index} position={[center.x, center.y, center.z]} rotation={[euler.x, euler.y, euler.z]}>
-            <cylinderGeometry args={[0.01, 0.01, distance, 8]} />
+            <cylinderGeometry args={[xrMode === 'ar' ? 0.02 : 0.01, xrMode === 'ar' ? 0.02 : 0.01, distance, 8]} />
             <meshStandardMaterial
               color={connection.color}
               emissive={connection.color}
-              emissiveIntensity={0.9}
-              transparent
-              opacity={connection.opacity}
+              emissiveIntensity={xrMode === 'ar' ? 1.5 : 0.9}
+              transparent={xrMode !== 'ar'}
+              opacity={xrMode === 'ar' ? 1.0 : connection.opacity}
             />
           </mesh>
         )
